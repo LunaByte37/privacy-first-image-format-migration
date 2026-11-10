@@ -1,0 +1,17 @@
+{
+  "name": "privacy-first-image-format-migration",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "demo": "node src/format-migration.ts",
+    "test": "node --test test/format-migration.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  },
+  "dependencies": {
+    "zod": "^3.23.0"
+  }
+}
