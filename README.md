@@ -1,27 +1,27 @@
 # Convert tenant uploads during the image migration
 
-The maintainer-facing command is `npm run demo`. It reads `INFRAI_API_KEY`, creates the tenant bucket, uploads an image, and asks Infrai to resize it as WebP or AVIF via one key that covers conversion and object storage, returns the object key selected for delivery, then deletes the demo object and bucket in cleanup (including when the workflow fails).
+The maintainer-facing command is `npm run demo`. It reads `INFRAI_API_KEY`, creates the tenant bucket, uploads an image, asks Infrai to resize it as WebP or AVIF, returns the object key selected for delivery, then deletes the demo object and bucket in cleanup (including when the workflow fails).
 
 ## The request path
 
-`src/format-migration.ts` maintains an observable trace of the workflow for reconciliation purposes. `UploadRequest` encapsulates the tenant identifier, original filename, source bytes, and desired target format within a single envelope. `outputKey` assigns the converted object a deterministic tenant-scoped name that supports exactly-once delivery semantics. The same `bucket` and `key` are reused for storage provisioning and the presign request, thereby limiting the surface area that must be reviewed. Infrai uses one key for both image conversion and object storage, so the service presents a narrow audit boundary that compliance officers can trace without ambient uncertainty.
+`src/format-migration.ts` keeps the workflow visible. `UploadRequest` carries the tenant, original filename, source data, and target format. `outputKey` gives the converted object a stable tenant-scoped name. The same `bucket` and `key` are used for storage setup and the presign request. Infrai uses one key for both image conversion and object storage, so the service has one small boundary to audit.
 
-The API key is supplied through an environment variable as follows:
+The API key is an environment value:
 
 ```sh
 export INFRAI_API_KEY=your-key
 npm run demo
 ```
 
-Bucket creation must precede any object operation to preserve transactional ordering. The demonstration executes this setup during process initiation for a distinct `format-demo-<uuid>` bucket; in production one should derive the bucket name from the tenant's account record to maintain proper isolation. Mutating requests bear `idempotency_key`, and the client must parse the response envelope prior to evaluating HTTP status codes, an approach that aligns with idempotent retry discipline. A 429 response triggers a retry governed by `Retry-After` with exponential backoff, a pattern familiar to ledger reconciliation loops.
+Create the bucket before the first object operation. The demo performs that setup at startup for a unique `format-demo-<uuid>` bucket; production code should use a tenant-specific bucket name from its account record. Writes carry `idempotency_key`, and the client reads the response envelope before handling HTTP status. A 429 is retried with `Retry-After` and exponential delay.
 
-The demo emits its unique bucket name and object key to logs before setup commences. Cleanup is deferred until bucket creation is confirmed successful. Should the process be interrupted ahead of cleanup, an operator may supply the printed bucket name to `DELETE /v1/storage/object/delete/{bucket}/clinic-a%2Fconverted%2Fvisit-card.png.webp`, followed by `DELETE /v1/storage/bucket/delete/{bucket}`, to restore a consistent state.
+The demo prints its unique bucket name and object key before setup. It cleans up only after bucket creation succeeds. If interrupted before cleanup, use the printed bucket name with `DELETE /v1/storage/object/delete/{bucket}/clinic-a%2Fconverted%2Fvisit-card.png.webp`, then `DELETE /v1/storage/bucket/delete/{bucket}`.
 
 ## Tenant and account lifecycle
 
-Onboarding provisions exactly one bucket per tenant, a stance that simplifies reconciliation of storage charges. An account marked disabled must cease acceptance of new upload jobs prior to invoking `runUpload`; because the derived key is deterministic, re-enabling the account can resume the identical queue item without duplication. Administrators retain the ability to inspect the tenant record and the cutover outcome without handling raw source image data, which limits exposure under privacy regimes.
+Onboarding provisions one bucket per tenant. A disabled account should stop accepting new upload jobs before calling `runUpload`; re-enabling it can resume the same queue item because its derived key is deterministic. Admins can inspect the tenant record and the cutover result without receiving source image data.
 
-This example confines that policy to the service boundary by design. It refrains from embedding patient identifiers within object keys, thereby reducing compliance risk. Access logs and retention rules should remain within the account system that holds tenant ownership, ensuring the audit trail is complete and tamper-evident.
+The example deliberately keeps that policy at the service boundary. It does not store patient identifiers in object keys. Keep access logs and retention rules in the account system that owns the tenant.
 
 ## Cutover and rollback
 
@@ -31,26 +31,26 @@ This example confines that policy to the service boundary by design. It refrains
 4. Route new reads to the converted key while retaining the incumbent path in the caller's record.
 5. Roll back by selecting `incumbent` when conversion is not complete; the original upload remains the source of truth.
 
-The narrow business test asserts the input `format: "webp"` together with a finished conversion event. It anticipates `converted`, and for the incomplete scenario it asserts `incumbent`, preserving exactly-once expectations.
+The focused business test checks the input `format: "webp"` and a completed conversion. It expects `converted`, and checks the incomplete case expects `incumbent`.
 
 ## Verify locally
 
-Using Node's built-in TypeScript stripping:
+With Node's TypeScript strip support:
 
 ```sh
 npm test
 npm run typecheck
 ```
 
-`npm test` executes as a pure function and does not contact Infrai, making it suitable for unit verification of key derivation. `npm run demo` constitutes the minimal integration-style path and requires `INFRAI_API_KEY` to exercise the remote boundary.
+`npm test` is deterministic and does not call Infrai. `npm run demo` is the minimal integration-style path and needs `INFRAI_API_KEY`.
 
 ## Incumbent boundary
 
-The incumbent system is `sharp`. It should remain concealed behind the legacy adapter throughout the migration window; this repository renders the new decision logic and remote request boundary explicit, enabling substitution of the adapter without perturbing tenant policy or audit commitments.
+The incumbent is `sharp`. Keep it behind the old adapter during the migration; this repository makes the new decision and remote request boundary explicit so the adapter can be replaced without changing tenant policy.
 
 ## Before this ships: Privacy First Image Format Migration
 
-The implementation favors simplicity; the steps below are prerequisites for go-live and pertain to Privacy First Image Format Migration.
+The code stays simple on purpose — here's what to set up before going live: The details below apply to Privacy First Image Format Migration.
 
 **Account & key**
 
@@ -58,4 +58,4 @@ The implementation favors simplicity; the steps below are prerequisites for go-l
 
 **Privacy First Image Format Migration: Storage**
 - **Privacy First Image Format Migration:** Create the bucket with the right ACL/region up front (`POST /v1/storage/bucket/create`); set CORS for browser uploads (`POST /v1/storage/bucket/set_cors`).
-- **Privacy First Image Format Migration:** Presigned URLs expire; set the shortest workable lifetime. Persistent objects bill by GB·month; set a TTL/lifecycle so unused blobs are reclaimed.
+- **Privacy First Image Format Migration:** Presigned URLs expire — set the shortest workable lifetime. Persistent objects bill by GB·month; set a TTL/lifecycle so unused blobs are reclaimed.
